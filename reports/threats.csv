@@ -1,0 +1,7 @@
+type,message,ip,alerts_count,severity
+INFO,Vulners: CVE не найдено (total=0),,,
+SUSPICIOUS_IP,,8.42.77.171,52.0,high
+SUSPICIOUS_IP,,37.49.231.178,6.0,medium
+SUSPICIOUS_IP,,92.63.194.33,6.0,medium
+SUSPICIOUS_IP,,185.53.91.55,6.0,medium
+SUSPICIOUS_IP,,194.28.115.243,4.0,medium
