@@ -1,0 +1,9 @@
+type,id,cvss,title,ip,malicious,suspicious,reputation,risk_level,severity,reason,alerts_count
+CVE_HIGH_RISK,CVELIST:CVE-2024-21762,9.8,CVE-2024-21762,,,,,,,,
+VT_REPUTATION,,,,185.176.27.6,1.0,0.0,0.0,medium,,,
+VT_MALICIOUS,,,,185.176.27.6,,,,,CRITICAL,1 malicious detections,
+SUSPICIOUS_IP,,,,8.42.77.171,,,,,high,,52.0
+SUSPICIOUS_IP,,,,185.53.91.55,,,,,medium,,6.0
+SUSPICIOUS_IP,,,,92.63.194.33,,,,,medium,,6.0
+SUSPICIOUS_IP,,,,37.49.231.178,,,,,medium,,6.0
+SUSPICIOUS_IP,,,,194.28.115.243,,,,,medium,,4.0
