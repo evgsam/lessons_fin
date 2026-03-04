@@ -4,23 +4,20 @@ import os
 from dotenv import load_dotenv
 import pandas as pd
 import matplotlib.pyplot as plt
+import vulners
 
-load_dotenv()
-vt_api_key = os.getenv("VT_API_KEY")
-vulner_api_key = os.getenv("VULNER_API_KEY")
 
-def virus_total_request(api_key:str, ip:str ):
+def virus_total_request(vt_api_key: str, ip: str) -> dict[str, any]:
     vt_resp = requests.get(
         "https://www.virustotal.com/api/v3/ip_addresses/"+ip,
         headers={
-            "x-apikey": api_key,
+            "x-apikey": vt_api_key,
             "Accept": "application/json"
         }
     )
     
     if vt_resp.status_code == 200:
         vt_data = vt_resp.json()
-        # Возвращаем только полезные данные для анализа
         return {
             "status": "success",
             "ip": ip,
@@ -33,27 +30,30 @@ def virus_total_request(api_key:str, ip:str ):
             "message": vt_resp.text
         }
 
-
-def vulners_request(api_key):
-    """Возвращает список CVE по простой строке поиска"""
-    vulner_resp = requests.post(
-        "https://vulners.com/api/v3/search/lucene",
-        headers={
-            "X-Api-Key": api_key,
-            "Content-Type": "application/json"
-        },
-        json={
-            "query": "type:cve AND Microsoft",   # или Linux, Apache, Fortinet и т.п.
-            "size": 5
-        }
-    )
+def vulners_request(vulner_api_key: str, cve_key:str) -> dict[str, any]:
+    cve_key = ''
+    vulner_url = "https://vulners.com/api/v3/search/id/"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Api-Key": vulner_api_key  
+    }
+    data = {
+        "id": [cve_key]
+    }
+    vulner_resp  = requests.post(vulner_url, headers=headers, json=data)
 
     if vulner_resp.status_code == 200:
         data = vulner_resp.json()
+        documents= data["data"]["documents"]
+        documents_list = []
+        for key, doc in documents.items():
+            doc_copy = doc.copy()
+            doc_copy['vulners_key'] = key
+            documents_list.append(doc_copy)
         return {
             "status": "success",
-            "total": data.get("total", 0),
-            "search": data.get("search", [])
+            "total": len(documents_list),  
+            "search": documents_list        
         }
     else:
         return {
@@ -63,7 +63,7 @@ def vulners_request(api_key):
         }
 
 
-def read_suricata_logs():
+def read_suricata_logs() -> pd.DataFrame:
     """Читает Suricata eve.json из src/suricata_logs/honeypot-2018/"""
     current_dir = os.path.dirname(os.path.abspath(__file__))  # /.../lessons_fin/src
     project_root = os.path.dirname(current_dir)                # /.../lessons_fin
@@ -79,34 +79,100 @@ def read_suricata_logs():
     print(f"Загружено событий: {len(logs_df)}")
     return logs_df
 
-def analyze(suricata_logs, vulners_data, vt_data):
+
+def analyze_vt_reputation(vt_data: dict) -> dict:
+    """Извлекает ключевые метрики VirusTotal"""
+    if vt_data['status'] != 'success':
+        return {"reputation": "unknown", "risk": "low"}
+    
+    attributes = vt_data['attributes']
+    stats = attributes.get('last_analysis_stats', {})
+    
+    # Подсчёт рисков
+    malicious = stats.get('malicious', 0)
+    suspicious = stats.get('suspicious', 0)
+    reputation = attributes.get('reputation', 0)
+    
+    # Оценка риска
+    risk_score = malicious * 10 + suspicious * 3 - reputation
+    risk_level = "high" if risk_score > 20 else "medium" if risk_score > 5 else "low"
+    
+    return {
+        "malicious": malicious,
+        "suspicious": suspicious, 
+        "reputation": reputation,
+        "risk_score": risk_score,
+        "risk_level": risk_level
+    }
+
+def analyze(suricata_logs: pd.DataFrame, vulners_data: dict[str, any], vt_data: dict[str, any]):
     """Анализирует логи и API данные на угрозы"""
     threats = []
-    
-    # 1. ОПАСНЫЕ УЯЗВИМОСТИ — ИСПРАВЛЕНО
-    high_risk_cve = pd.DataFrame()  # ← ИНИЦИАЛИЗИРУЕМ ПУСТЫМ
+    high_risk_cve = pd.DataFrame()  
     
     if vulners_data["total"] > 0:
         high_cve = pd.DataFrame(vulners_data["search"])
-        # Безопасно проверяем наличие колонки CVSS
-        if 'cvss.score' in high_cve.columns:
-            high_risk_cve = high_cve[high_cve['cvss.score'] >= 7.0]
-        else:
-            high_risk_cve = high_cve  # Берём все CVE
+       
+        def extract_cvss_score(doc):
+            if isinstance(doc, dict) and 'cvss' in doc and isinstance(doc['cvss'], dict):
+                return doc['cvss'].get('score')
+            return None
+
+        if not high_cve.empty:
+            high_cve['cvss_score'] = high_cve.apply(lambda row: extract_cvss_score(row.to_dict()), axis=1)
+            high_cve['cvss_score'] = pd.to_numeric(high_cve['cvss_score'], errors='coerce')
         
-        for _, cve in high_risk_cve.iterrows():
+        # Фильтруем по CVSS >= 7.0
+            high_risk_mask = high_cve['cvss_score'].notna() & (high_cve['cvss_score'] >= 7.0)
+            high_risk_cve = high_cve[high_risk_mask]
+        
+            if not high_risk_cve.empty:
+                for _, cve in high_risk_cve.iterrows():
+                    threats.append({
+                        "type": "CVE_HIGH_RISK",
+                        "id": cve.get('id', 'N/A'),
+                        "cvss": cve['cvss_score'],
+                        "title": cve.get('title', 'N/A')
+                    })
+            else:
+                threats.append({
+                    "type": "INFO",
+                    "message": "Vulners: высокорисковых CVE (CVSS >= 7.0) не найдено"
+                })
+        else:       
             threats.append({
-                "type": "CVE_HIGH_RISK",
-                "id": cve.get('id', 'N/A'),
-                "cvss": cve.get('cvss.score', 'N/A'),
-                "title": cve.get('title', 'N/A')
+            "type": "INFO",
+            "message": "Vulners: DataFrame пуст"
             })
     else:
         threats.append({
             "type": "INFO",
-            "message": f"Vulners: CVE не найдено (total={vulners_data['total']})"
+            "message": f"Vulners: CVE не найдено (status={vulners_data.get('status', 'unknown')}, total={vulners_data.get('total', 0)})"
         })
     
+    if vt_data['status'] == 'success':
+        vt_analysis = analyze_vt_reputation(vt_data)
+        
+        # Добавляем в угрозы
+        threats.append({
+            "type": "VT_REPUTATION",
+            "ip": vt_data['ip'],
+            "malicious": vt_analysis['malicious'],
+            "suspicious": vt_analysis['suspicious'],
+            "reputation": vt_analysis['reputation'],
+            "risk_level": vt_analysis['risk_level']
+        })
+        
+        # Если IP malicious → HIGH угроза
+        if vt_analysis['malicious'] > 0:
+            threats.append({
+                "type": "VT_MALICIOUS",
+                "ip": vt_data['ip'],
+                "severity": "CRITICAL",
+                "reason": f"{vt_analysis['malicious']} malicious detections"
+            })
+
+
     # 2. ПОДОЗРИТЕЛЬНЫЕ IP из Suricata
     alerts = suricata_logs[suricata_logs['event_type'] == 'alert']
     top_ips = alerts['src_ip'].value_counts().head(5)
@@ -187,14 +253,18 @@ def save_report(threats):
         print("Нет IP-угроз для графика")
     
 
-
-
 def main():
+    load_dotenv()
+    vt_api_key = os.getenv("VT_API_KEY")
+    vulner_api_key = os.getenv("VULNER_API_KEY")
+
     suricata_logs = read_suricata_logs()
-    suspicious_ips = suricata_logs[suricata_logs['event_type']=='alert']['src_ip'].unique()
            
-    # Получаем JSON по API для обработки, в virus total для теста 5 IP-адресов 
-    vulners_data = vulners_request(vulner_api_key)
+    # Запрос в vulners по СVE 
+    vulners_data = vulners_request(vulner_api_key,"CVELIST:CVE-2024-21762")
+    
+    #Запрос в virus totla по IP из сурикаты
+    suspicious_ips = suricata_logs[suricata_logs['event_type']=='alert']['src_ip'].unique()
     for ip in suspicious_ips[:5]:  
         vt_data = virus_total_request(vt_api_key,ip)  
 
