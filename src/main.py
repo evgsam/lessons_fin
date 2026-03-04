@@ -4,10 +4,9 @@ import os
 from dotenv import load_dotenv
 import pandas as pd
 import matplotlib.pyplot as plt
-import vulners
-
 
 def virus_total_request(vt_api_key: str, ip: str) -> dict[str, any]:
+    """Запрос VirusTotal API для анализа IP-адреса."""
     vt_resp = requests.get(
         "https://www.virustotal.com/api/v3/ip_addresses/"+ip,
         headers={
@@ -30,8 +29,9 @@ def virus_total_request(vt_api_key: str, ip: str) -> dict[str, any]:
             "message": vt_resp.text
         }
 
-def vulners_request(vulner_api_key: str, cve_key:str) -> dict[str, any]:
-    cve_key = ''
+
+def vulners_request(vulner_api_key: str, cve_key: str) -> dict[str, any]:
+    """Запрос Vulners API для поиска CVE по идентификатору."""
     vulner_url = "https://vulners.com/api/v3/search/id/"
     headers = {
         "Content-Type": "application/json",
@@ -40,11 +40,11 @@ def vulners_request(vulner_api_key: str, cve_key:str) -> dict[str, any]:
     data = {
         "id": [cve_key]
     }
-    vulner_resp  = requests.post(vulner_url, headers=headers, json=data)
+    vulner_resp = requests.post(vulner_url, headers=headers, json=data)
 
     if vulner_resp.status_code == 200:
         data = vulner_resp.json()
-        documents= data["data"]["documents"]
+        documents = data["data"]["documents"]
         documents_list = []
         for key, doc in documents.items():
             doc_copy = doc.copy()
@@ -64,7 +64,7 @@ def vulners_request(vulner_api_key: str, cve_key:str) -> dict[str, any]:
 
 
 def read_suricata_logs() -> pd.DataFrame:
-    """Читает Suricata eve.json из src/suricata_logs/honeypot-2018/"""
+    """Читает Suricata eve.json из src/suricata_logs/honeypot-2018/."""
     current_dir = os.path.dirname(os.path.abspath(__file__))  # /.../lessons_fin/src
     project_root = os.path.dirname(current_dir)                # /.../lessons_fin
     log_path = os.path.join(project_root, "suricata_logs", "honeypot-2018", "eve.json")
@@ -81,7 +81,7 @@ def read_suricata_logs() -> pd.DataFrame:
 
 
 def analyze_vt_reputation(vt_data: dict) -> dict:
-    """Извлекает ключевые метрики VirusTotal"""
+    """Извлекает ключевые метрики репутации IP из VirusTotal."""
     if vt_data['status'] != 'success':
         return {"reputation": "unknown", "risk": "low"}
     
@@ -105,8 +105,9 @@ def analyze_vt_reputation(vt_data: dict) -> dict:
         "risk_level": risk_level
     }
 
+
 def analyze(suricata_logs: pd.DataFrame, vulners_data: dict[str, any], vt_data: dict[str, any]):
-    """Анализирует логи и API данные на угрозы"""
+    """Анализирует логи Suricata и данные API на наличие угроз."""
     threats = []
     high_risk_cve = pd.DataFrame()  
     
@@ -172,8 +173,7 @@ def analyze(suricata_logs: pd.DataFrame, vulners_data: dict[str, any], vt_data: 
                 "reason": f"{vt_analysis['malicious']} malicious detections"
             })
 
-
-    # 2. ПОДОЗРИТЕЛЬНЫЕ IP из Suricata
+    # Подозрительные IP из Suricata
     alerts = suricata_logs[suricata_logs['event_type'] == 'alert']
     top_ips = alerts['src_ip'].value_counts().head(5)
     for ip, count in top_ips.items():
@@ -184,7 +184,7 @@ def analyze(suricata_logs: pd.DataFrame, vulners_data: dict[str, any], vt_data: 
             "severity": "high" if count > 10 else "medium"
         })
     
-    # 3. ЧАСТЫЕ DNS-запросы
+    # Частые DNS-запросы (возможный туннель)
     dns_logs = suricata_logs[suricata_logs['event_type'] == 'dns']
     if len(dns_logs) > 0:
         dns_spam = dns_logs.groupby('src_ip').size()
@@ -198,8 +198,9 @@ def analyze(suricata_logs: pd.DataFrame, vulners_data: dict[str, any], vt_data: 
     
     return threats
 
+
 def react_to_threats(threats):
-    """Этап 3: Имитация реагирования"""
+    """Имитирует реагирование на обнаруженные угрозы."""
     for threat in threats:
         if threat['type'] == 'SUSPICIOUS_IP':
             ip = threat['ip']
@@ -214,24 +215,24 @@ def react_to_threats(threats):
     print("\n Реагирование завершено")
     return threats
 
+
 def save_report(threats):
-    """Этап 4: CSV + график топ-5 IP"""
-    
-    # 1. СОЗДАЁМ ПАПКУ reports/
+    """Сохраняет отчёт в CSV и строит график топ-5 IP."""
+    # Создаём папку reports/
     current_dir = os.path.dirname(os.path.abspath(__file__))  # /.../src
     project_root = os.path.dirname(current_dir)               # /.../lessons_fin
     reports_dir = os.path.join(project_root, "reports")
     
-    os.makedirs(reports_dir, exist_ok=True)  # ← СОЗДАЁТ ПАПКУ АВТОМАТИЧЕСКИ
+    os.makedirs(reports_dir, exist_ok=True)
     print(f"Создан reports: {reports_dir}")
     
-    # 2. Сохраняем CSV
+    # Сохраняем CSV
     df_threats = pd.DataFrame(threats)
     csv_path = os.path.join(reports_dir, "threats.csv")
     df_threats.to_csv(csv_path, index=False)
     print(f"Отчёт: {csv_path}")
     
-    # 3. График ТОП-5 IP
+    # График ТОП-5 IP
     ip_threats = [t for t in threats if t['type'] == 'SUSPICIOUS_IP']
     if ip_threats:
         ips = [t['ip'] for t in ip_threats]
@@ -251,23 +252,23 @@ def save_report(threats):
         print(f"График: {png_path}")
     else:
         print("Нет IP-угроз для графика")
-    
+
 
 def main():
+    """Главная функция: оркестрация анализа логов и API-запросов."""
     load_dotenv()
     vt_api_key = os.getenv("VT_API_KEY")
     vulner_api_key = os.getenv("VULNER_API_KEY")
 
     suricata_logs = read_suricata_logs()
            
-    # Запрос в vulners по СVE 
+    # Запрос в vulners по CVE 
     vulners_data = vulners_request(vulner_api_key,"CVELIST:CVE-2024-21762")
     
-    #Запрос в virus totla по IP из сурикаты
+    # Запрос в VirusTotal по IP из Suricata
     suspicious_ips = suricata_logs[suricata_logs['event_type']=='alert']['src_ip'].unique()
     for ip in suspicious_ips[:5]:  
         vt_data = virus_total_request(vt_api_key,ip)  
-
 
     print("Vulners данные получены:", vulners_data["status"])
     print("VT данные получены:", vt_data["status"])
@@ -280,17 +281,6 @@ def main():
 
     react_to_threats(threats)
     save_report(threats)
-    # Теперь можно обработать данные дальше:
-    # - сохранить в pandas
-    # - проанализировать CVSS/reputation
-    # - построить графики
-    
-    #return {
-    #    "vulners": vulners_data,
-    #    "virustotal": vt_data
-    #}
-
 
 if __name__ == "__main__":
     result = main()
-    # result содержит все JSON для дальнейшей обработки
